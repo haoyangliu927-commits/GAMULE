@@ -1,0 +1,21 @@
+{
+  "num_genes": 420,
+  "cme_threshold": 0.9,
+  "pvalue_threshold": 0.05,
+  "jaccard_threshold": 0.7,
+  "top_k": 10,
+  "negative_pairs": 21565,
+  "positive_pairs": 4890,
+  "positive_negative_overlap": 0,
+  "genes_with_negative_signal": 319,
+  "genes_with_positive_signal": 313,
+  "heatmap_path": "/home/luqi/Desktop/GAMULE22/clean_HYperedge/results/cme_supervision_heatmaps.png",
+  "npz_path": "/home/luqi/Desktop/GAMULE22/clean_HYperedge/results/cme_supervision_matrices.npz",
+  "module_summary": {
+    "num_gene_modules": 6,
+    "num_hyperedges_total": 7,
+    "null_hyperedge_index": 6,
+    "supervised_genes": 319,
+    "unassigned_genes": 101
+  }
+}
