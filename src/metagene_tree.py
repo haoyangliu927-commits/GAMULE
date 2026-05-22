@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -36,6 +37,15 @@ class CellTypeScoringResult:
     cell_type_labels: list[str]
     predicted_cell_types: np.ndarray
     best_metagene_indices: np.ndarray
+    stats: dict[str, object]
+
+
+@dataclass
+class CellHierarchyScoringResult:
+    hierarchy_relation_table: list[dict[str, object]]
+    cell_assignment_table: list[dict[str, object]]
+    predicted_parent_types: np.ndarray
+    reference_parent_types: np.ndarray
     stats: dict[str, object]
 
 
@@ -401,6 +411,100 @@ def score_cell_types_from_metagene_tree(
         candidate_node_indices=leaf_indices,
         normalize=normalize,
         exclude_reference_labels=exclude_reference_labels,
+    )
+
+
+def infer_parent_cell_type(cell_type: object) -> str:
+    label = str(cell_type)
+    match = re.match(r"^[A-Za-z]+", label)
+    if match:
+        return match.group(0)
+    for separator in ("_", "-", "/"):
+        if separator in label:
+            return label.split(separator, 1)[0]
+    return label
+
+
+def score_cell_hierarchy_from_cell_types(
+    cell_type_result: CellTypeScoringResult,
+    *,
+    parent_extractor=infer_parent_cell_type,
+) -> CellHierarchyScoringResult:
+    predicted = np.asarray(cell_type_result.predicted_cell_types, dtype=object)
+    reference = np.asarray(
+        [row["reference_cell_type"] for row in cell_type_result.cell_assignment_table],
+        dtype=object,
+    )
+    if predicted.shape[0] != reference.shape[0]:
+        raise ValueError("Predicted and reference cell type arrays must have the same length.")
+
+    predicted_parent = np.asarray([parent_extractor(label) for label in predicted], dtype=object)
+    reference_parent = np.asarray([parent_extractor(label) for label in reference], dtype=object)
+    correct_mask = predicted_parent == reference_parent
+
+    relation_items: dict[tuple[str, str], dict[str, object]] = {}
+    for pred_type, pred_parent, ref_parent, is_correct in zip(
+        predicted,
+        predicted_parent,
+        reference_parent,
+        correct_mask,
+    ):
+        key = (str(pred_type), str(pred_parent))
+        if key not in relation_items:
+            relation_items[key] = {
+                "predicted_cell_type": str(pred_type),
+                "predicted_parent_type": str(pred_parent),
+                "assigned_cells": 0,
+                "correct_parent_cells": 0,
+                "reference_parent_counts": {},
+            }
+        item = relation_items[key]
+        item["assigned_cells"] = int(item["assigned_cells"]) + 1
+        item["correct_parent_cells"] = int(item["correct_parent_cells"]) + int(is_correct)
+        counts = item["reference_parent_counts"]
+        counts[str(ref_parent)] = counts.get(str(ref_parent), 0) + 1
+
+    relation_table = []
+    for item in relation_items.values():
+        assigned_cells = int(item["assigned_cells"])
+        correct_parent_cells = int(item["correct_parent_cells"])
+        relation_table.append(
+            {
+                **item,
+                "parent_accuracy": (
+                    correct_parent_cells / assigned_cells if assigned_cells > 0 else np.nan
+                ),
+            }
+        )
+    relation_table.sort(key=lambda row: (row["predicted_parent_type"], row["predicted_cell_type"]))
+
+    cell_assignment_table = [
+        {
+            "cell_index": int(row["cell_index"]),
+            "predicted_cell_type": str(predicted[idx]),
+            "reference_cell_type": str(reference[idx]),
+            "predicted_parent_type": str(predicted_parent[idx]),
+            "reference_parent_type": str(reference_parent[idx]),
+            "correct_parent": bool(correct_mask[idx]),
+        }
+        for idx, row in enumerate(cell_type_result.cell_assignment_table)
+    ]
+
+    total_correct = int(correct_mask.sum())
+    total_evaluable = int(correct_mask.shape[0])
+    stats = {
+        "hierarchy_total_correct": total_correct,
+        "hierarchy_total_evaluable": total_evaluable,
+        "hierarchy_accuracy": total_correct / total_evaluable if total_evaluable > 0 else np.nan,
+        "parent_rule": "leading letters, fallback split on _, -, /",
+    }
+
+    return CellHierarchyScoringResult(
+        hierarchy_relation_table=relation_table,
+        cell_assignment_table=cell_assignment_table,
+        predicted_parent_types=predicted_parent,
+        reference_parent_types=reference_parent,
+        stats=stats,
     )
 
 
