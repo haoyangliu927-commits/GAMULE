@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CME 到 Gene Module 推断流程</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; margin: 0; color: #1f2933; background: #f7f8fa; }
+    main { max-width: 1040px; margin: 0 auto; padding: 32px 22px 56px; background: #fff; }
+    h1, h2, h3 { line-height: 1.25; color: #102a43; }
+    h1 { margin-top: 0; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    pre { overflow-x: auto; background: #111827; color: #e5e7eb; padding: 16px; border-radius: 8px; }
+    table { border-collapse: collapse; width: 100%; margin: 14px 0 24px; }
+    th, td { border: 1px solid #d9e2ec; padding: 9px 11px; text-align: left; vertical-align: top; }
+    th { background: #eef2f7; }
+    .note { border-left: 4px solid #3b82f6; background: #eff6ff; padding: 10px 14px; margin: 16px 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>CME 到 Gene Module 推断流程</h1>
+  <p>这个包把流程拆成三段：scRNA-seq expression 计算 CME，CME/Jaccard 生成正负监督，最后用超边模型推断 gene modules。默认使用 6 个有意义超边，加 1 个无意义/未分配超边。</p>
+
+  <h2>1. 输入与核心符号</h2>
+  <table>
+    <tr><th>对象</th><th>含义</th><th>代码位置</th></tr>
+    <tr><td><code>X</code></td><td>gene × cell 表达矩阵，从 <code>h5ad</code> 的 cell × gene 转置得到。</td><td><code>src/cme_supervision.py</code></td></tr>
+    <tr><td><code>CME</code></td><td>每个基因对的互斥分数。</td><td><code>compute_cme_matrix</code></td></tr>
+    <tr><td><code>pval</code></td><td>通过 gene 内 cell shuffle 得到的 high-tail permutation p-value。</td><td><code>compute_cme_pvalues</code></td></tr>
+    <tr><td><code>negative_mask</code></td><td>CME true，即互斥关系，作为负监督。</td><td><code>build_supervision_from_cme</code></td></tr>
+    <tr><td><code>positive_mask</code></td><td>Jaccard 同类邻居及邻居的邻居，去掉负监督重叠后作为正监督。</td><td><code>build_supervision_from_cme</code></td></tr>
+  </table>
+
+  <h2>2. CME 与假设检验</h2>
+  <p>对每对基因 <code>i, j</code>，CME 使用共同表达最小值占比定义：</p>
+  <pre><code>min_sum = sum_c min(X[i, c], X[j, c])
+CME(i, j) = 1 - max(min_sum / sum_c X[i, c], min_sum / sum_c X[j, c])</code></pre>
+  <p>p-value 使用置换零分布：对每个基因的表达在 cell 维度内独立 shuffle，重复 <code>n_permutations</code> 次，计算高尾概率：</p>
+  <pre><code>p(i, j) = (#{CME_null(i, j) >= CME_observed(i, j)} + 1) / (n_permutations + 1)</code></pre>
+  <p>互斥 true 的判定：</p>
+  <pre><code>negative_mask = (CME &gt; t_CME) &amp; (pval &lt; t_p)</code></pre>
+
+  <h2>3. Jaccard 正监督</h2>
+  <p>每个基因的 CME true 行向量视为 <code>CME vector</code>。任意两个基因的 Jaccard Index 为：</p>
+  <pre><code>Jaccard(i, j) = #[1,1] / (#[0,1] + #[1,0] + #[1,1])</code></pre>
+  <p>实现上用一次矩阵乘法得到 <code>#[1,1]</code>：</p>
+  <pre><code>intersection = CME_binary_float @ CME_binary_float.T
+union = row_sum[:, None] + row_sum[None, :] - intersection
+jaccard = intersection / union</code></pre>
+  <p>然后按你的规则生成正监督：</p>
+  <ol>
+    <li><code>Jaccard &gt; t_Jaccard</code> 的基因对是潜在同类。</li>
+    <li>对每个基因只保留 top <code>k_Jaccard</code> 个最高 Jaccard 同类邻居；如果不够 k 个就保留已有的，不增补。</li>
+    <li>对基因 <code>g</code>，取直接同类邻居 <code>N_g</code> 和邻居的邻居 <code>N_g_g</code> 作为正监督候选。</li>
+    <li>最终正监督会去掉所有负监督重叠，避免一个基因对同时被正负约束。</li>
+  </ol>
+
+  <h2>4. 超边模型与未分配超边</h2>
+  <p>默认 <code>num_gene_modules = 6</code>，<code>num_hyperedges = 7</code>。前 6 个超边参与训练和相似度计算；第 7 个只接收完全没有出现在任何监督矩阵里的基因。</p>
+  <div class="note">关键设计：第 7 个无意义超边不进入训练时的 <code>partition @ hyperedge_emb</code>，最终 <code>gene_emb</code> 也只由前 6 个有意义超边生成。因此未分配超边不会污染有意义 gene modules。</div>
+
+  <h2>5. 文件结构</h2>
+  <table>
+    <tr><th>文件</th><th>职责</th></tr>
+    <tr><td><code>src/cme_supervision.py</code></td><td>expression 读取、CME 计算、permutation p-value、CME true、Jaccard、top-k 邻居、正负监督生成。</td></tr>
+    <tr><td><code>src/cme_visualization.py</code></td><td>CME、p-value、Jaccard、正负监督 heatmap。</td></tr>
+    <tr><td><code>src/supervision_pipeline.py</code></td><td>根据正负监督训练超边模型，包含 6+1 未分配超边逻辑。</td></tr>
+    <tr><td><code>src/train.py</code></td><td>底层 PyTorch 训练循环。</td></tr>
+    <tr><td><code>scripts/test_cme_supervision.py</code></td><td>命令行测试脚本，生成 heatmap、矩阵和统计 JSON。</td></tr>
+    <tr><td><code>clean_supervision_run.ipynb</code></td><td>干净 notebook，串联 CME -> 监督 -> gene modules。</td></tr>
+  </table>
+
+  <h2>6. 运行方式</h2>
+  <p>在仓库根目录运行：</p>
+  <pre><code>/home/luqi/miniforge3/envs/gamule/bin/python clean_HYperedge/scripts/test_cme_supervision.py</code></pre>
+  <p>输出会写到：</p>
+  <ul>
+    <li><code>clean_HYperedge/results/cme_supervision_heatmaps.png</code></li>
+    <li><code>clean_HYperedge/results/cme_supervision_matrices.npz</code></li>
+    <li><code>clean_HYperedge/results/cme_supervision_stats.json</code></li>
+  </ul>
+
+  <h2>7. Notebook 中最核心的几步</h2>
+  <pre><code>expression = load_expression_from_h5ad("datasets/adata_672.h5ad", num_genes=420)
+cme_matrix = compute_cme_matrix(expression.matrix)
+pval_matrix = compute_cme_pvalues(expression.matrix, cme_matrix, n_permutations=20)
+
+supervision = build_supervision_from_cme(
+    cme_matrix,
+    pval_matrix,
+    cme_threshold=0.9,
+    pvalue_threshold=0.05,
+    jaccard_threshold=0.7,
+    top_k=10,
+)
+
+result = run_supervised_hyperedges(
+    pos_mask=supervision.positive_mask,
+    neg_mask=supervision.negative_mask,
+    num_hyperedges=7,
+    use_unassigned_hyperedge=True,
+)</code></pre>
+</main>
+</body>
+</html>
