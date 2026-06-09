@@ -48,6 +48,11 @@ def train_embedding_weakpos0(
     hierarchy_strength=0.0,
     hierarchy_margin=0.0,
     hierarchy_min_direction_weight=0.0,
+    garbage_hyperedge_index=None,
+    ambiguity_weight=None,
+    garbage_strength=0.0,
+    clean_repel_strength=0.0,
+    garbage_eps=1e-8,
     ):
     if isinstance(init_partition, np.ndarray):
         init_partition = torch.from_numpy(init_partition).float()
@@ -62,6 +67,12 @@ def train_embedding_weakpos0(
     full_pos_mask = _move_mask_to_device(full_pos_mask, device)
     partial_pos_mask = _move_mask_to_device(partial_pos_mask, device)
     directed_inclusion_mask = _move_mask_to_device(directed_inclusion_mask, device)
+    if ambiguity_weight is not None:
+        ambiguity_weight = torch.as_tensor(ambiguity_weight, dtype=torch.float32, device=device)
+        if ambiguity_weight.ndim != 1 or ambiguity_weight.shape[0] != init_partition.shape[0]:
+            raise ValueError(
+                "ambiguity_weight must be a 1D tensor/array with one value per gene."
+            )
     if relation_masks is not None:
         relation_masks = {
             name: _move_mask_to_device(mask, device)
@@ -119,7 +130,52 @@ def train_embedding_weakpos0(
         else:
             loss_hierarchy = torch.zeros((), device=partition_used.device, dtype=partition_used.dtype)
 
-        loss = loss_main + hierarchy_strength * loss_hierarchy + alpha * loss_entropy
+        garbage_enabled = (
+            garbage_hyperedge_index is not None
+            and ambiguity_weight is not None
+            and garbage_strength > 0.0
+        )
+        if garbage_enabled:
+            garbage_idx = int(garbage_hyperedge_index)
+            if garbage_idx < 0 or garbage_idx >= partition_used.shape[1]:
+                raise ValueError(
+                    f"garbage_hyperedge_index={garbage_idx} is out of bounds for "
+                    f"{partition_used.shape[1]} hyperedges."
+                )
+            p_garbage = partition_used[:, garbage_idx].clamp(garbage_eps, 1.0 - garbage_eps)
+            weight = ambiguity_weight.to(device=partition_used.device, dtype=partition_used.dtype)
+            loss_garbage_push = -(weight * torch.log(p_garbage + garbage_eps)).mean()
+            loss_items["loss_garbage_push"] = loss_garbage_push
+            if clean_repel_strength > 0.0:
+                loss_clean_repel = -(
+                    (1.0 - weight) * torch.log(1.0 - p_garbage + garbage_eps)
+                ).mean()
+            else:
+                loss_clean_repel = torch.zeros(
+                    (),
+                    device=partition_used.device,
+                    dtype=partition_used.dtype,
+                )
+            loss_items["loss_clean_repel"] = loss_clean_repel
+        else:
+            loss_garbage_push = torch.zeros(
+                (),
+                device=partition_used.device,
+                dtype=partition_used.dtype,
+            )
+            loss_clean_repel = torch.zeros(
+                (),
+                device=partition_used.device,
+                dtype=partition_used.dtype,
+            )
+
+        loss = (
+            loss_main
+            + hierarchy_strength * loss_hierarchy
+            + alpha * loss_entropy
+            + garbage_strength * loss_garbage_push
+            + clean_repel_strength * loss_clean_repel
+        )
         loss.backward()
         optimizer.step()
 
@@ -142,10 +198,16 @@ def train_embedding_weakpos0(
             hierarchy_log = ""
             if hierarchy_enabled:
                 hierarchy_log = f", hierarchy_directed: {loss_hierarchy.item():.9f}"
+            garbage_log = ""
+            if garbage_enabled:
+                garbage_log = (
+                    f", garbage_push: {loss_garbage_push.item():.9f}, "
+                    f"clean_repel: {loss_clean_repel.item():.9f}"
+                )
             print(
                 f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.9f}, "
                 f"{_format_supervision_log(loss_items, resolved_targets)}"
-                f"{hierarchy_log}, Entropy: {loss_entropy.item():.4f}"
+                f"{hierarchy_log}{garbage_log}, Entropy: {loss_entropy.item():.4f}"
             )
 
     with torch.no_grad():

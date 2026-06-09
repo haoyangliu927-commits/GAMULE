@@ -32,6 +32,7 @@ from src.cme_supervision import (
     load_expression_from_h5ad,
     save_supervision_npz,
 )
+from src.gene_ambiguity import compute_gene_ambiguity
 from src.cme_visualization import (
     plot_combined_cme_supervision_heatmaps,
 )
@@ -131,9 +132,14 @@ hierarchy_margin = 0.0
 hierarchy_min_direction_weight = 0.0
 n_permutations = 100
 
-num_gene_modules = 8
-num_gene_modules = max(1, min(num_gene_modules, num_genes))
-num_hyperedges = num_gene_modules + 1
+num_biological_modules = 8
+num_garbage_modules = 1
+num_hyperedges = num_biological_modules + num_garbage_modules
+num_hyperedges = max(1, min(num_hyperedges, num_genes))
+garbage_hyperedge_index = num_hyperedges - 1
+garbage_strength = 0.05
+clean_repel_strength = 0.0
+use_unassigned_hyperedge = False
 
 torch.manual_seed(seed)
 
@@ -151,8 +157,13 @@ run_config = {
     "hierarchy_margin": hierarchy_margin,
     "hierarchy_min_direction_weight": hierarchy_min_direction_weight,
     "n_permutations": n_permutations,
-    "num_gene_modules": num_gene_modules,
+    "num_biological_modules": num_biological_modules,
+    "num_garbage_modules": num_garbage_modules,
     "num_hyperedges": num_hyperedges,
+    "garbage_hyperedge_index": garbage_hyperedge_index,
+    "garbage_strength": garbage_strength,
+    "clean_repel_strength": clean_repel_strength,
+    "use_unassigned_hyperedge": use_unassigned_hyperedge,
 }
 run_config
 
@@ -207,6 +218,39 @@ if directed_inclusion_mask is None:
     raise RuntimeError("inclusion_threshold was set, but inclusion_directed_mask was not generated.")
 supervision.stats
 
+ambiguity = compute_gene_ambiguity(
+    positive_mask=supervision.positive_mask,
+    negative_mask=supervision.negative_mask,
+    partial_pos_mask=supervision.inclusion_partial_mask,
+    directed_inclusion_mask=supervision.inclusion_directed_mask,
+    gene_names=expression.gene_names,
+)
+ambiguity_table = ambiguity.table.copy()
+if "gene_module" in adata.var:
+    ambiguity_table["reference_gene_module"] = adata.var["gene_module"].astype(str).values[
+        : len(ambiguity_table)
+    ]
+ambiguity_table.to_csv(RESULT_DIR / "gene_ambiguity_scores.csv", index=False)
+ambiguity_table.nlargest(20, "ambiguity_weight").to_csv(
+    RESULT_DIR / "top20_ambiguity_genes.csv",
+    index=False,
+)
+if "reference_gene_module" in ambiguity_table:
+    high_ambiguity_reference_counts = (
+        ambiguity_table.loc[ambiguity_table["ambiguity_weight"] > 0.5, "reference_gene_module"]
+        .value_counts()
+        .rename_axis("reference_gene_module")
+        .reset_index(name="high_ambiguity_genes")
+    )
+else:
+    high_ambiguity_reference_counts = pd.DataFrame(
+        columns=["reference_gene_module", "high_ambiguity_genes"]
+    )
+high_ambiguity_reference_counts.to_csv(
+    RESULT_DIR / "high_ambiguity_reference_module_counts.csv",
+    index=False,
+)
+
 mask_entry_summary = {
     "full_pos": int(pos_mask.sum().item()),
     "partial_pos": int(partial_pos_mask.sum().item()),
@@ -238,13 +282,17 @@ result = run_supervised_hyperedges(
     directed_inclusion_mask=directed_inclusion_mask,
     num_genes=num_genes,
     num_hyperedges=num_hyperedges,
-    use_unassigned_hyperedge=True,
+    use_unassigned_hyperedge=use_unassigned_hyperedge,
     pos_strength=jaccard_pos_strength,
     partial_pos_strength=inclusion_partial_strength,
     neg_strength=neg_strength,
     hierarchy_strength=hierarchy_strength,
     hierarchy_margin=hierarchy_margin,
     hierarchy_min_direction_weight=hierarchy_min_direction_weight,
+    garbage_hyperedge_index=garbage_hyperedge_index,
+    ambiguity_weight=torch.from_numpy(ambiguity.ambiguity_weight),
+    garbage_strength=garbage_strength,
+    clean_repel_strength=clean_repel_strength,
     epochs=1000,
     lr=0.016,
     entropy_strength=0.001,
@@ -259,6 +307,26 @@ result = run_supervised_hyperedges(
 }
 
 summarize_unassigned_genes(result)
+
+partition_np = result.partition.detach().cpu().numpy()
+assigned_hyperedge = partition_np.argmax(axis=1).astype(int)
+garbage_probability = partition_np[:, garbage_hyperedge_index]
+garbage_gene_table = pd.DataFrame(
+    {
+        "gene_index": range(num_genes),
+        "gene_name": expression.gene_names[:num_genes],
+        "assigned_hyperedge": assigned_hyperedge,
+        "garbage_probability": garbage_probability,
+        "ambiguity_weight": ambiguity.ambiguity_weight,
+        "robust_z": ambiguity.robust_z,
+        "raw_ambiguity_score": ambiguity.raw_ambiguity_score,
+    }
+)
+if "gene_module" in adata.var:
+    garbage_gene_table["reference_gene_module"] = adata.var["gene_module"].astype(str).values[
+        :num_genes
+    ]
+garbage_gene_table.to_csv(RESULT_DIR / "garbage_gene_table.csv", index=False)
 
 fig = plot_run_summary(result)
 fig.savefig(RESULT_DIR / "hyperedge_run_summary.png", dpi=180, bbox_inches="tight")
@@ -437,6 +505,12 @@ summary = {
     "supervision_stats": supervision.stats,
     "mask_summary": mask_entry_summary,
     "unassigned_summary": summarize_unassigned_genes(result),
+    "garbage_hyperedge_index": int(garbage_hyperedge_index),
+    "garbage_strength": float(garbage_strength),
+    "clean_repel_strength": float(clean_repel_strength),
+    "mean_ambiguity_weight": float(ambiguity.ambiguity_weight.mean()),
+    "num_high_ambiguity_genes": int((ambiguity.ambiguity_weight > 0.5).sum()),
+    "num_genes_assigned_to_garbage": int((assigned_hyperedge == garbage_hyperedge_index).sum()),
     "metagene_tree_stats": metagene_tree.stats,
     "module_inclusion_stats": module_inclusion.stats,
     "tree_validation": tree_validation,
@@ -448,6 +522,10 @@ summary = {
         "combined_supervision_heatmaps": "combined_supervision_heatmaps.png",
         "supervision_masks": "supervision_masks.png",
         "hyperedge_run_summary": "hyperedge_run_summary.png",
+        "gene_ambiguity_scores": "gene_ambiguity_scores.csv",
+        "top20_ambiguity_genes": "top20_ambiguity_genes.csv",
+        "high_ambiguity_reference_module_counts": "high_ambiguity_reference_module_counts.csv",
+        "garbage_gene_table": "garbage_gene_table.csv",
         "metagene_cme_tree": "metagene_cme_tree.png",
         "module_inclusion_heatmaps": "module_inclusion_heatmaps.png",
         "module_inclusion_hierarchy": "module_inclusion_hierarchy.png",

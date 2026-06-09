@@ -284,6 +284,10 @@ def run_supervised_hyperedges(
     hierarchy_strength: float = 0.0,
     hierarchy_margin: float = 0.0,
     hierarchy_min_direction_weight: float = 0.0,
+    garbage_hyperedge_index=None,
+    ambiguity_weight=None,
+    garbage_strength: float = 0.0,
+    clean_repel_strength: float = 0.0,
     epochs: int = 10000,
     lr: float = 0.016,
     entropy_strength: float = 0.001,
@@ -373,6 +377,10 @@ def run_supervised_hyperedges(
         "hierarchy_strength": hierarchy_strength,
         "hierarchy_margin": hierarchy_margin,
         "hierarchy_min_direction_weight": hierarchy_min_direction_weight,
+        "garbage_hyperedge_index": garbage_hyperedge_index,
+        "ambiguity_weight": ambiguity_weight,
+        "garbage_strength": garbage_strength,
+        "clean_repel_strength": clean_repel_strength,
     }
     if supervision_mode == "binary":
         train_kwargs.update(
