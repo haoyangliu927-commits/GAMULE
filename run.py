@@ -44,7 +44,6 @@ from src.metagene_tree import (
     make_xml_parent_extractor,
     plot_module_inclusion_heatmaps,
     plot_module_inclusion_hierarchy,
-    plot_metagene_tree,
     score_cell_types_from_metagene_tree,
     score_cell_hierarchy_from_cell_types,
     validate_metagene_tree_result,
@@ -52,7 +51,6 @@ from src.metagene_tree import (
 from src.supervision_pipeline import (
     plot_loss_history,
     plot_run_summary,
-    plot_supervision_masks,
     run_supervised_hyperedges,
     summarize_unassigned_genes,
 )
@@ -255,25 +253,6 @@ if "gene_module" in adata.var:
         : len(ambiguity_table)
     ]
 ambiguity_table.to_csv(RESULT_DIR / "gene_ambiguity_scores.csv", index=False)
-ambiguity_table.nlargest(20, "ambiguity_weight").to_csv(
-    RESULT_DIR / "top20_ambiguity_genes.csv",
-    index=False,
-)
-if "reference_gene_module" in ambiguity_table:
-    high_ambiguity_reference_counts = (
-        ambiguity_table.loc[ambiguity_table["ambiguity_weight"] > 0.5, "reference_gene_module"]
-        .value_counts()
-        .rename_axis("reference_gene_module")
-        .reset_index(name="high_ambiguity_genes")
-    )
-else:
-    high_ambiguity_reference_counts = pd.DataFrame(
-        columns=["reference_gene_module", "high_ambiguity_genes"]
-    )
-high_ambiguity_reference_counts.to_csv(
-    RESULT_DIR / "high_ambiguity_reference_module_counts.csv",
-    index=False,
-)
 
 mask_entry_summary = {
     "full_pos": int(pos_mask.sum().item()),
@@ -290,10 +269,6 @@ _ = plot_combined_cme_supervision_heatmaps(
     save_path=RESULT_DIR / "combined_supervision_heatmaps.png",
     show=False,
 );
-
-fig = plot_supervision_masks(pos_mask, neg_mask, partial_pos_mask=partial_pos_mask)
-fig.savefig(RESULT_DIR / "supervision_masks.png", dpi=180, bbox_inches="tight")
-plt.close(fig)
 
 
 # %%
@@ -388,10 +363,6 @@ gene_assignment_diagnostics.to_csv(
     RESULT_DIR / "gene_assignment_diagnostics.csv",
     index=False,
 )
-gene_assignment_diagnostics.to_csv(
-    RESULT_DIR / "gene_garbage_diagnostics_all.csv",
-    index=False,
-)
 gene_assignment_diagnostics.loc[
     gene_assignment_diagnostics["assigned_hyperedge"] == garbage_hyperedge_index
 ].to_csv(RESULT_DIR / "garbage_genes_only.csv", index=False)
@@ -453,18 +424,6 @@ pd.DataFrame(metagene_tree.module_assignment_table).to_csv(
     RESULT_DIR / "module_assignment_table.csv",
     index=False,
 )
-pd.DataFrame(
-    [
-        {"parent": int(parent), "child": int(child)}
-        for parent, child in metagene_tree.tree_edges
-    ]
-).to_csv(RESULT_DIR / "tree_edges.csv", index=False)
-
-fig = plot_metagene_tree(
-    metagene_tree,
-    save_path=RESULT_DIR / "metagene_cme_tree.png",
-)
-plt.close(fig)
 
 module_inclusion = aggregate_module_inclusion_from_genes(
     metagene_tree,
@@ -484,10 +443,6 @@ pd.DataFrame(
     index=module_inclusion_labels,
     columns=module_inclusion_labels,
 ).to_csv(RESULT_DIR / "module_inclusion_directed_fraction_matrix.csv")
-pd.DataFrame(module_inclusion.edge_table).to_csv(
-    RESULT_DIR / "module_inclusion_edges.csv",
-    index=False,
-)
 pd.DataFrame(module_inclusion.selected_edge_table).to_csv(
     RESULT_DIR / "module_inclusion_selected_edges.csv",
     index=False,
@@ -638,23 +593,16 @@ summary = {
     "outputs": {
         "input_expression_heatmap": "input_expression_heatmap.png",
         "combined_supervision_heatmaps": "combined_supervision_heatmaps.png",
-        "supervision_masks": "supervision_masks.png",
         "hyperedge_run_summary": "hyperedge_run_summary.png",
         "training_loss_history": "training_loss_history.csv",
         "training_loss_history_plot": "training_loss_history.png",
         "gene_ambiguity_scores": "gene_ambiguity_scores.csv",
-        "top20_ambiguity_genes": "top20_ambiguity_genes.csv",
-        "high_ambiguity_reference_module_counts": "high_ambiguity_reference_module_counts.csv",
         "gene_assignment_diagnostics": "gene_assignment_diagnostics.csv",
-        "gene_garbage_diagnostics_all": "gene_garbage_diagnostics_all.csv",
         "garbage_genes_only": "garbage_genes_only.csv",
-        "metagene_cme_tree": "metagene_cme_tree.png",
         "module_inclusion_heatmaps": "module_inclusion_heatmaps.png",
         "module_inclusion_hierarchy": "module_inclusion_hierarchy.png",
-        "module_inclusion_edges": "module_inclusion_edges.csv",
         "module_inclusion_selected_edges": "module_inclusion_selected_edges.csv",
         "gene_modules": "gene_modules.csv",
-        "tree_edges": "tree_edges.csv",
     },
 }
 with open(RESULT_DIR / "summary.json", "w", encoding="utf-8") as handle:
