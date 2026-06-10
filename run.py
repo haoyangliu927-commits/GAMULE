@@ -50,6 +50,7 @@ from src.metagene_tree import (
     validate_metagene_tree_result,
 )
 from src.supervision_pipeline import (
+    plot_loss_history,
     plot_run_summary,
     plot_supervision_masks,
     run_supervised_hyperedges,
@@ -143,7 +144,15 @@ clean_repel_strength = 0.0
 garbage_margin_strength = 0.05
 garbage_margin = 0.1
 exclude_garbage_from_relation_loss = True
+initialize_all_to_garbage = True
+garbage_init_logit = 0.2
+normal_init_logit = 0.0
 use_unassigned_hyperedge = False
+training_epochs = 3000
+entropy_strength = 0.001
+entropy_schedule = "delayed_linear"
+entropy_warmup_start_fraction = 0.5
+entropy_warmup_end_fraction = 1.0
 
 torch.manual_seed(seed)
 
@@ -170,7 +179,15 @@ run_config = {
     "garbage_margin_strength": garbage_margin_strength,
     "garbage_margin": garbage_margin,
     "exclude_garbage_from_relation_loss": exclude_garbage_from_relation_loss,
+    "initialize_all_to_garbage": initialize_all_to_garbage,
+    "garbage_init_logit": garbage_init_logit,
+    "normal_init_logit": normal_init_logit,
     "use_unassigned_hyperedge": use_unassigned_hyperedge,
+    "training_epochs": training_epochs,
+    "entropy_strength": entropy_strength,
+    "entropy_schedule": entropy_schedule,
+    "entropy_warmup_start_fraction": entropy_warmup_start_fraction,
+    "entropy_warmup_end_fraction": entropy_warmup_end_fraction,
 }
 run_config
 
@@ -296,6 +313,9 @@ result = run_supervised_hyperedges(
     hierarchy_strength=hierarchy_strength,
     hierarchy_margin=hierarchy_margin,
     hierarchy_min_direction_weight=hierarchy_min_direction_weight,
+    initialize_all_to_garbage=initialize_all_to_garbage,
+    garbage_init_logit=garbage_init_logit,
+    normal_init_logit=normal_init_logit,
     garbage_hyperedge_index=garbage_hyperedge_index,
     ambiguity_weight=torch.from_numpy(ambiguity.ambiguity_weight),
     garbage_strength=garbage_strength,
@@ -303,9 +323,12 @@ result = run_supervised_hyperedges(
     garbage_margin_strength=garbage_margin_strength,
     garbage_margin=garbage_margin,
     exclude_garbage_from_relation_loss=exclude_garbage_from_relation_loss,
-    epochs=1000,
+    epochs=training_epochs,
     lr=0.016,
-    entropy_strength=0.001,
+    entropy_strength=entropy_strength,
+    entropy_schedule=entropy_schedule,
+    entropy_warmup_start_fraction=entropy_warmup_start_fraction,
+    entropy_warmup_end_fraction=entropy_warmup_end_fraction,
     ranges_map=None,
     device="auto",
     seed=seed,
@@ -317,6 +340,11 @@ result = run_supervised_hyperedges(
 }
 
 summarize_unassigned_genes(result)
+
+loss_history_df = pd.DataFrame(result.loss_history)
+loss_history_df.to_csv(RESULT_DIR / "training_loss_history.csv", index=False)
+fig = plot_loss_history(result, save_path=RESULT_DIR / "training_loss_history.png")
+plt.close(fig)
 
 partition_np = result.partition.detach().cpu().numpy()
 assigned_hyperedge = partition_np.argmax(axis=1).astype(int)
@@ -592,6 +620,9 @@ summary = {
     "mean_ambiguity_weight": float(ambiguity.ambiguity_weight.mean()),
     "num_high_ambiguity_genes": int((ambiguity.ambiguity_weight > 0.5).sum()),
     "num_genes_assigned_to_garbage": int((assigned_hyperedge == garbage_hyperedge_index).sum()),
+    "final_loss": float(result.losses[-1]) if result.losses else None,
+    "min_loss": float(min(result.losses)) if result.losses else None,
+    "min_loss_epoch": int(np.argmin(result.losses) + 1) if result.losses else None,
     "mean_garbage_probability_assigned_garbage": mean_garbage_probability_assigned_garbage,
     "mean_ambiguity_weight_assigned_garbage": mean_ambiguity_weight_assigned_garbage,
     "mean_ambiguity_weight_non_garbage": mean_ambiguity_weight_non_garbage,
@@ -609,6 +640,8 @@ summary = {
         "combined_supervision_heatmaps": "combined_supervision_heatmaps.png",
         "supervision_masks": "supervision_masks.png",
         "hyperedge_run_summary": "hyperedge_run_summary.png",
+        "training_loss_history": "training_loss_history.csv",
+        "training_loss_history_plot": "training_loss_history.png",
         "gene_ambiguity_scores": "gene_ambiguity_scores.csv",
         "top20_ambiguity_genes": "top20_ambiguity_genes.csv",
         "high_ambiguity_reference_module_counts": "high_ambiguity_reference_module_counts.csv",

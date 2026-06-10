@@ -25,6 +25,36 @@ def _format_supervision_log(loss_items, relation_targets):
     return ", ".join(log_parts)
 
 
+def _scheduled_entropy_weight(
+    *,
+    alpha: float,
+    epoch: int,
+    epochs: int,
+    entropy_schedule: str,
+    entropy_warmup_start_fraction: float,
+    entropy_warmup_end_fraction: float,
+) -> float:
+    if entropy_schedule == "constant":
+        return float(alpha)
+    if entropy_schedule not in {"delayed_linear", "linear"}:
+        raise ValueError("entropy_schedule must be one of {'constant', 'linear', 'delayed_linear'}.")
+
+    if entropy_schedule == "linear":
+        start_fraction = 0.0
+    else:
+        start_fraction = float(entropy_warmup_start_fraction)
+    end_fraction = float(entropy_warmup_end_fraction)
+    if end_fraction <= start_fraction:
+        return float(alpha) if (epoch + 1) / max(1, epochs) >= end_fraction else 0.0
+
+    progress = (epoch + 1) / max(1, epochs)
+    if progress <= start_fraction:
+        return 0.0
+    if progress >= end_fraction:
+        return float(alpha)
+    return float(alpha) * (progress - start_fraction) / (end_fraction - start_fraction)
+
+
 def train_embedding_weakpos0(
     init_partition,
     init_hyperedge_emb,
@@ -44,6 +74,9 @@ def train_embedding_weakpos0(
     partial_pos_threshold=0.5,
     neg_target=0.0,
     entropy_gene_mask=None,
+    entropy_schedule="constant",
+    entropy_warmup_start_fraction=0.5,
+    entropy_warmup_end_fraction=1.0,
     directed_inclusion_mask=None,
     hierarchy_strength=0.0,
     hierarchy_margin=0.0,
@@ -56,6 +89,7 @@ def train_embedding_weakpos0(
     garbage_margin=0.1,
     exclude_garbage_from_relation_loss=False,
     garbage_eps=1e-8,
+    return_loss_history=False,
     ):
     if isinstance(init_partition, np.ndarray):
         init_partition = torch.from_numpy(init_partition).float()
@@ -85,6 +119,7 @@ def train_embedding_weakpos0(
 
     optimizer = torch.optim.Adam([partition, hyperedge_emb], lr=lr)
     losses = []
+    loss_history = []
 
     for epoch in range(epochs):
         optimizer.zero_grad()
@@ -211,10 +246,19 @@ def train_embedding_weakpos0(
                 dtype=partition_used.dtype,
             )
 
+        entropy_weight = _scheduled_entropy_weight(
+            alpha=alpha,
+            epoch=epoch,
+            epochs=epochs,
+            entropy_schedule=entropy_schedule,
+            entropy_warmup_start_fraction=entropy_warmup_start_fraction,
+            entropy_warmup_end_fraction=entropy_warmup_end_fraction,
+        )
+
         loss = (
             loss_main
             + hierarchy_strength * loss_hierarchy
-            + alpha * loss_entropy
+            + entropy_weight * loss_entropy
             + garbage_strength * loss_garbage_push
             + clean_repel_strength * loss_clean_repel
             + garbage_margin_strength * loss_garbage_margin
@@ -223,6 +267,19 @@ def train_embedding_weakpos0(
         optimizer.step()
 
         losses.append(loss.item())
+        loss_history.append(
+            {
+                "epoch": int(epoch + 1),
+                "loss_total": float(loss.item()),
+                "loss_main": float(loss_main.item()),
+                "loss_entropy": float(loss_entropy.item()),
+                "entropy_weight": float(entropy_weight),
+                "loss_hierarchy_directed": float(loss_hierarchy.item()),
+                "loss_garbage_push": float(loss_garbage_push.item()),
+                "loss_clean_repel": float(loss_clean_repel.item()),
+                "loss_garbage_margin": float(loss_garbage_margin.item()),
+            }
+        )
 
         if (epoch + 1) % 100 == 0 or epoch == 0:
             resolved_targets = relation_targets
@@ -252,6 +309,7 @@ def train_embedding_weakpos0(
                 f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.9f}, "
                 f"{_format_supervision_log(loss_items, resolved_targets)}"
                 f"{hierarchy_log}{garbage_log}, Entropy: {loss_entropy.item():.4f}"
+                f", EntropyWeight: {entropy_weight:.6f}"
             )
 
     with torch.no_grad():
@@ -259,4 +317,7 @@ def train_embedding_weakpos0(
         hyperedge_emb_norm = F.normalize(hyperedge_emb, p=2, dim=1)
         gene_emb_final = partition_final @ hyperedge_emb_norm
 
-    return partition_final.detach(), hyperedge_emb.detach(), gene_emb_final.detach(), losses
+    outputs = (partition_final.detach(), hyperedge_emb.detach(), gene_emb_final.detach(), losses)
+    if return_loss_history:
+        return (*outputs, loss_history)
+    return outputs

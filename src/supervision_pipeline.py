@@ -31,6 +31,7 @@ class SupervisedHypergraphResult:
     hyperedge_emb: torch.Tensor
     gene_emb: torch.Tensor
     losses: list[float]
+    loss_history: list[dict[str, float]]
     init_gene_emb: torch.Tensor
     init_hyperedge_emb: torch.Tensor
     init_partition: torch.Tensor
@@ -46,6 +47,7 @@ class SupervisedHypergraphResult:
     hierarchy_strength: float = 0.0
     hierarchy_margin: float = 0.0
     hierarchy_min_direction_weight: float = 0.0
+    entropy_schedule: str = "constant"
 
 
 def centers_from_ranges(ranges: Sequence[tuple[int, int]]) -> list[int]:
@@ -284,6 +286,9 @@ def run_supervised_hyperedges(
     hierarchy_strength: float = 0.0,
     hierarchy_margin: float = 0.0,
     hierarchy_min_direction_weight: float = 0.0,
+    initialize_all_to_garbage: bool = False,
+    garbage_init_logit: float = 4.0,
+    normal_init_logit: float = 0.0,
     garbage_hyperedge_index=None,
     ambiguity_weight=None,
     garbage_strength: float = 0.0,
@@ -294,6 +299,9 @@ def run_supervised_hyperedges(
     epochs: int = 10000,
     lr: float = 0.016,
     entropy_strength: float = 0.001,
+    entropy_schedule: str = "constant",
+    entropy_warmup_start_fraction: float = 0.5,
+    entropy_warmup_end_fraction: float = 1.0,
     dropout_rate: float = 0.0,
     device: str | torch.device = "auto",
     ranges_map: Mapping[int, Sequence[tuple[int, int]]] | None = DEFAULT_HYPEREDGE_RANGES,
@@ -363,6 +371,17 @@ def run_supervised_hyperedges(
         ranges_map=ranges_map,
         representative_indices=representative_indices,
     )
+    if initialize_all_to_garbage:
+        if garbage_hyperedge_index is None:
+            raise ValueError("garbage_hyperedge_index is required when initialize_all_to_garbage=True.")
+        garbage_idx = int(garbage_hyperedge_index)
+        if garbage_idx < 0 or garbage_idx >= init.init_partition.shape[1]:
+            raise ValueError(
+                f"garbage_hyperedge_index={garbage_idx} is out of bounds for "
+                f"{init.init_partition.shape[1]} initialized hyperedges."
+            )
+        init.init_partition = torch.full_like(init.init_partition, float(normal_init_logit))
+        init.init_partition[:, garbage_idx] = float(garbage_init_logit)
 
     selected_device = resolve_device(device)
     train_kwargs = {
@@ -373,6 +392,9 @@ def run_supervised_hyperedges(
         "lr": lr,
         "device": selected_device,
         "alpha": entropy_strength,
+        "entropy_schedule": entropy_schedule,
+        "entropy_warmup_start_fraction": entropy_warmup_start_fraction,
+        "entropy_warmup_end_fraction": entropy_warmup_end_fraction,
         "neg_target": neg_strength,
         "supervision_mode": supervision_mode,
         "entropy_gene_mask": supervised_gene_mask,
@@ -387,6 +409,7 @@ def run_supervised_hyperedges(
         "garbage_margin_strength": garbage_margin_strength,
         "garbage_margin": garbage_margin,
         "exclude_garbage_from_relation_loss": exclude_garbage_from_relation_loss,
+        "return_loss_history": True,
     }
     if supervision_mode == "binary":
         train_kwargs.update(
@@ -405,7 +428,7 @@ def run_supervised_hyperedges(
             }
         )
 
-    partition, hyperedge_emb, gene_emb, losses = train_embedding_weakpos0(**train_kwargs)
+    partition, hyperedge_emb, gene_emb, losses, loss_history = train_embedding_weakpos0(**train_kwargs)
 
     null_hyperedge_index = None
     init_partition = init.init_partition
@@ -427,6 +450,7 @@ def run_supervised_hyperedges(
         hyperedge_emb=hyperedge_emb,
         gene_emb=gene_emb,
         losses=losses,
+        loss_history=loss_history,
         init_gene_emb=init.init_gene_emb,
         init_hyperedge_emb=init_hyperedge_emb,
         init_partition=init_partition,
@@ -442,6 +466,7 @@ def run_supervised_hyperedges(
         hierarchy_strength=float(hierarchy_strength),
         hierarchy_margin=float(hierarchy_margin),
         hierarchy_min_direction_weight=float(hierarchy_min_direction_weight),
+        entropy_schedule=entropy_schedule,
     )
 
 
@@ -592,4 +617,42 @@ def plot_run_summary(result: SupervisedHypergraphResult):
         plt.colorbar(image, ax=ax)
 
     plt.tight_layout()
+    return fig
+
+
+def plot_loss_history(result: SupervisedHypergraphResult, *, save_path: str | Path | None = None):
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    history = pd.DataFrame(result.loss_history)
+    if history.empty:
+        history = pd.DataFrame({"epoch": range(1, len(result.losses) + 1), "loss_total": result.losses})
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    axes[0].plot(history["epoch"], history["loss_total"], label="total", linewidth=1.8)
+    for column in [
+        "loss_main",
+        "loss_garbage_push",
+        "loss_garbage_margin",
+        "loss_entropy",
+        "loss_hierarchy_directed",
+    ]:
+        if column in history:
+            axes[0].plot(history["epoch"], history[column], label=column, alpha=0.8)
+    axes[0].set_ylabel("Loss")
+    axes[0].set_title("Training Loss History")
+    axes[0].legend(loc="best", fontsize=8)
+    axes[0].grid(alpha=0.25)
+
+    if "entropy_weight" in history:
+        axes[1].plot(history["epoch"], history["entropy_weight"], color="#7c3aed", linewidth=1.8)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Entropy weight")
+    axes[1].grid(alpha=0.25)
+
+    fig.tight_layout()
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=180, bbox_inches="tight")
     return fig
