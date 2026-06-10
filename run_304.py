@@ -42,14 +42,12 @@ from src.metagene_tree import (
     make_xml_parent_extractor,
     plot_module_inclusion_heatmaps,
     plot_module_inclusion_hierarchy,
-    plot_metagene_tree,
     score_cell_types_from_metagene_tree,
     score_cell_hierarchy_from_cell_types,
     validate_metagene_tree_result,
 )
 from src.supervision_pipeline import (
     plot_run_summary,
-    plot_supervision_masks,
     run_supervised_hyperedges,
     summarize_unassigned_genes,
 )
@@ -218,10 +216,6 @@ _ = plot_combined_cme_supervision_heatmaps(
     show=False,
 );
 
-fig = plot_supervision_masks(pos_mask, neg_mask, partial_pos_mask=partial_pos_mask)
-fig.savefig(RESULT_DIR / "supervision_masks.png", dpi=180, bbox_inches="tight")
-plt.close(fig)
-
 
 # %%
 # ===== 三路监督 -> 超边 gene modules =====
@@ -312,18 +306,6 @@ pd.DataFrame(metagene_tree.module_assignment_table).to_csv(
     RESULT_DIR / "module_assignment_table.csv",
     index=False,
 )
-pd.DataFrame(
-    [
-        {"parent": int(parent), "child": int(child)}
-        for parent, child in metagene_tree.tree_edges
-    ]
-).to_csv(RESULT_DIR / "tree_edges.csv", index=False)
-
-fig = plot_metagene_tree(
-    metagene_tree,
-    save_path=RESULT_DIR / "metagene_cme_tree.png",
-)
-plt.close(fig)
 
 module_inclusion = aggregate_module_inclusion_from_genes(
     metagene_tree,
@@ -343,10 +325,6 @@ pd.DataFrame(
     index=module_inclusion_labels,
     columns=module_inclusion_labels,
 ).to_csv(RESULT_DIR / "module_inclusion_directed_fraction_matrix.csv")
-pd.DataFrame(module_inclusion.edge_table).to_csv(
-    RESULT_DIR / "module_inclusion_edges.csv",
-    index=False,
-)
 pd.DataFrame(module_inclusion.selected_edge_table).to_csv(
     RESULT_DIR / "module_inclusion_selected_edges.csv",
     index=False,
@@ -441,15 +419,11 @@ summary = {
     "outputs": {
         "input_expression_heatmap": "input_expression_heatmap.png",
         "combined_supervision_heatmaps": "combined_supervision_heatmaps.png",
-        "supervision_masks": "supervision_masks.png",
         "hyperedge_run_summary": "hyperedge_run_summary.png",
-        "metagene_cme_tree": "metagene_cme_tree.png",
         "module_inclusion_heatmaps": "module_inclusion_heatmaps.png",
         "module_inclusion_hierarchy": "module_inclusion_hierarchy.png",
-        "module_inclusion_edges": "module_inclusion_edges.csv",
         "module_inclusion_selected_edges": "module_inclusion_selected_edges.csv",
         "gene_modules": "gene_modules.csv",
-        "tree_edges": "tree_edges.csv",
     },
 }
 with open(RESULT_DIR / "summary.json", "w", encoding="utf-8") as handle:

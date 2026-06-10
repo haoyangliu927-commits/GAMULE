@@ -38,14 +38,12 @@ from src.cme_visualization import (
 )
 from src.metagene_tree import (
     build_metagene_tree_from_result,
-    plot_metagene_tree,
     score_cell_types_from_metagene_tree,
     score_cell_hierarchy_from_cell_types,
     validate_metagene_tree_result,
 )
 from src.supervision_pipeline import (
     plot_run_summary,
-    plot_supervision_masks,
     run_supervised_hyperedges,
     summarize_unassigned_genes,
 )
@@ -198,10 +196,6 @@ _ = plot_combined_cme_supervision_heatmaps(
     show=False,
 );
 
-fig = plot_supervision_masks(pos_mask, neg_mask, partial_pos_mask=partial_pos_mask)
-fig.savefig(RESULT_DIR / "supervision_masks.png", dpi=180, bbox_inches="tight")
-plt.close(fig)
-
 
 # %%
 # ===== 三路监督 -> 超边 gene modules =====
@@ -297,18 +291,6 @@ pd.DataFrame(metagene_tree.module_assignment_table).to_csv(
     RESULT_DIR / "module_assignment_table.csv",
     index=False,
 )
-pd.DataFrame(
-    [
-        {"parent": int(parent), "child": int(child)}
-        for parent, child in metagene_tree.tree_edges
-    ]
-).to_csv(RESULT_DIR / "tree_edges.csv", index=False)
-
-fig = plot_metagene_tree(
-    metagene_tree,
-    save_path=RESULT_DIR / "metagene_cme_tree.png",
-)
-plt.close(fig)
 
 
 # %%
@@ -375,11 +357,8 @@ summary = {
     "outputs": {
         "input_expression_heatmap": "input_expression_heatmap.png",
         "combined_supervision_heatmaps": "combined_supervision_heatmaps.png",
-        "supervision_masks": "supervision_masks.png",
         "hyperedge_run_summary": "hyperedge_run_summary.png",
-        "metagene_cme_tree": "metagene_cme_tree.png",
         "gene_modules": "gene_modules.csv",
-        "tree_edges": "tree_edges.csv",
     },
 }
 with open(RESULT_DIR / "summary.json", "w", encoding="utf-8") as handle:
