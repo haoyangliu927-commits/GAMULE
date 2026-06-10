@@ -288,6 +288,9 @@ def run_supervised_hyperedges(
     ambiguity_weight=None,
     garbage_strength: float = 0.0,
     clean_repel_strength: float = 0.0,
+    garbage_margin_strength: float = 0.0,
+    garbage_margin: float = 0.1,
+    exclude_garbage_from_relation_loss: bool = False,
     epochs: int = 10000,
     lr: float = 0.016,
     entropy_strength: float = 0.001,
@@ -381,6 +384,9 @@ def run_supervised_hyperedges(
         "ambiguity_weight": ambiguity_weight,
         "garbage_strength": garbage_strength,
         "clean_repel_strength": clean_repel_strength,
+        "garbage_margin_strength": garbage_margin_strength,
+        "garbage_margin": garbage_margin,
+        "exclude_garbage_from_relation_loss": exclude_garbage_from_relation_loss,
     }
     if supervision_mode == "binary":
         train_kwargs.update(

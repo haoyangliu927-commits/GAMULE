@@ -4,6 +4,7 @@ import re
 import sys
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import scanpy as sc
 import seaborn as sns
@@ -139,6 +140,9 @@ num_hyperedges = max(1, min(num_hyperedges, num_genes))
 garbage_hyperedge_index = num_hyperedges - 1
 garbage_strength = 0.05
 clean_repel_strength = 0.0
+garbage_margin_strength = 0.05
+garbage_margin = 0.1
+exclude_garbage_from_relation_loss = True
 use_unassigned_hyperedge = False
 
 torch.manual_seed(seed)
@@ -163,6 +167,9 @@ run_config = {
     "garbage_hyperedge_index": garbage_hyperedge_index,
     "garbage_strength": garbage_strength,
     "clean_repel_strength": clean_repel_strength,
+    "garbage_margin_strength": garbage_margin_strength,
+    "garbage_margin": garbage_margin,
+    "exclude_garbage_from_relation_loss": exclude_garbage_from_relation_loss,
     "use_unassigned_hyperedge": use_unassigned_hyperedge,
 }
 run_config
@@ -293,6 +300,9 @@ result = run_supervised_hyperedges(
     ambiguity_weight=torch.from_numpy(ambiguity.ambiguity_weight),
     garbage_strength=garbage_strength,
     clean_repel_strength=clean_repel_strength,
+    garbage_margin_strength=garbage_margin_strength,
+    garbage_margin=garbage_margin,
+    exclude_garbage_from_relation_loss=exclude_garbage_from_relation_loss,
     epochs=1000,
     lr=0.016,
     entropy_strength=0.001,
@@ -311,22 +321,52 @@ summarize_unassigned_genes(result)
 partition_np = result.partition.detach().cpu().numpy()
 assigned_hyperedge = partition_np.argmax(axis=1).astype(int)
 garbage_probability = partition_np[:, garbage_hyperedge_index]
-garbage_gene_table = pd.DataFrame(
+normal_hyperedge_indices = [
+    idx for idx in range(num_hyperedges) if idx != garbage_hyperedge_index
+]
+normal_probabilities = partition_np[:, normal_hyperedge_indices]
+max_normal_probability = normal_probabilities.max(axis=1)
+normal_prob_sum = normal_probabilities.sum(axis=1, keepdims=True)
+normal_probabilities_for_entropy = normal_probabilities / np.maximum(normal_prob_sum, 1e-8)
+assignment_entropy_normal = -np.sum(
+    normal_probabilities_for_entropy * np.log(normal_probabilities_for_entropy + 1e-8),
+    axis=1,
+) / np.log(max(2, len(normal_hyperedge_indices)))
+garbage_probability_margin = garbage_probability - max_normal_probability
+
+gene_assignment_diagnostics = pd.DataFrame(
     {
         "gene_index": range(num_genes),
         "gene_name": expression.gene_names[:num_genes],
         "assigned_hyperedge": assigned_hyperedge,
         "garbage_probability": garbage_probability,
+        "max_normal_probability": max_normal_probability,
+        "garbage_probability_minus_max_normal_probability": garbage_probability_margin,
+        "assignment_entropy_normal": assignment_entropy_normal,
         "ambiguity_weight": ambiguity.ambiguity_weight,
         "robust_z": ambiguity.robust_z,
         "raw_ambiguity_score": ambiguity.raw_ambiguity_score,
+        "contradiction_degree": ambiguity_table["contradiction_degree"].to_numpy(),
+        "bidirectional_inclusion_degree": ambiguity_table[
+            "bidirectional_inclusion_degree"
+        ].to_numpy(),
     }
 )
 if "gene_module" in adata.var:
-    garbage_gene_table["reference_gene_module"] = adata.var["gene_module"].astype(str).values[
-        :num_genes
-    ]
-garbage_gene_table.to_csv(RESULT_DIR / "garbage_gene_table.csv", index=False)
+    gene_assignment_diagnostics["reference_gene_module"] = adata.var["gene_module"].astype(
+        str
+    ).values[:num_genes]
+gene_assignment_diagnostics.to_csv(
+    RESULT_DIR / "gene_assignment_diagnostics.csv",
+    index=False,
+)
+gene_assignment_diagnostics.to_csv(
+    RESULT_DIR / "gene_garbage_diagnostics_all.csv",
+    index=False,
+)
+gene_assignment_diagnostics.loc[
+    gene_assignment_diagnostics["assigned_hyperedge"] == garbage_hyperedge_index
+].to_csv(RESULT_DIR / "garbage_genes_only.csv", index=False)
 
 fig = plot_run_summary(result)
 fig.savefig(RESULT_DIR / "hyperedge_run_summary.png", dpi=180, bbox_inches="tight")
@@ -495,6 +535,44 @@ else:
     else:
         print("没有可用的 tree XML，跳过细胞类型和从属关系准确率计算。")
 
+assigned_garbage_mask = assigned_hyperedge == garbage_hyperedge_index
+if assigned_garbage_mask.any():
+    mean_garbage_probability_assigned_garbage = float(
+        garbage_probability[assigned_garbage_mask].mean()
+    )
+    mean_ambiguity_weight_assigned_garbage = float(
+        ambiguity.ambiguity_weight[assigned_garbage_mask].mean()
+    )
+    mean_max_normal_probability_assigned_garbage = float(
+        max_normal_probability[assigned_garbage_mask].mean()
+    )
+    mean_garbage_margin_assigned_garbage = float(
+        garbage_probability_margin[assigned_garbage_mask].mean()
+    )
+else:
+    mean_garbage_probability_assigned_garbage = None
+    mean_ambiguity_weight_assigned_garbage = None
+    mean_max_normal_probability_assigned_garbage = None
+    mean_garbage_margin_assigned_garbage = None
+
+non_garbage_mask = ~assigned_garbage_mask
+mean_ambiguity_weight_non_garbage = (
+    float(ambiguity.ambiguity_weight[non_garbage_mask].mean())
+    if non_garbage_mask.any()
+    else None
+)
+if "reference_gene_module" in gene_assignment_diagnostics:
+    reference_module_counts_assigned_garbage = (
+        gene_assignment_diagnostics.loc[
+            assigned_garbage_mask,
+            "reference_gene_module",
+        ]
+        .value_counts()
+        .to_dict()
+    )
+else:
+    reference_module_counts_assigned_garbage = {}
+
 summary = {
     "adata_path": str(ADATA_PATH),
     "tree_xml_path": str(TREE_XML_PATH) if TREE_XML_PATH is not None else None,
@@ -508,9 +586,18 @@ summary = {
     "garbage_hyperedge_index": int(garbage_hyperedge_index),
     "garbage_strength": float(garbage_strength),
     "clean_repel_strength": float(clean_repel_strength),
+    "garbage_margin_strength": float(garbage_margin_strength),
+    "garbage_margin": float(garbage_margin),
+    "exclude_garbage_from_relation_loss": bool(exclude_garbage_from_relation_loss),
     "mean_ambiguity_weight": float(ambiguity.ambiguity_weight.mean()),
     "num_high_ambiguity_genes": int((ambiguity.ambiguity_weight > 0.5).sum()),
     "num_genes_assigned_to_garbage": int((assigned_hyperedge == garbage_hyperedge_index).sum()),
+    "mean_garbage_probability_assigned_garbage": mean_garbage_probability_assigned_garbage,
+    "mean_ambiguity_weight_assigned_garbage": mean_ambiguity_weight_assigned_garbage,
+    "mean_ambiguity_weight_non_garbage": mean_ambiguity_weight_non_garbage,
+    "mean_max_normal_probability_assigned_garbage": mean_max_normal_probability_assigned_garbage,
+    "mean_garbage_margin_assigned_garbage": mean_garbage_margin_assigned_garbage,
+    "reference_module_counts_assigned_garbage": reference_module_counts_assigned_garbage,
     "metagene_tree_stats": metagene_tree.stats,
     "module_inclusion_stats": module_inclusion.stats,
     "tree_validation": tree_validation,
@@ -525,7 +612,9 @@ summary = {
         "gene_ambiguity_scores": "gene_ambiguity_scores.csv",
         "top20_ambiguity_genes": "top20_ambiguity_genes.csv",
         "high_ambiguity_reference_module_counts": "high_ambiguity_reference_module_counts.csv",
-        "garbage_gene_table": "garbage_gene_table.csv",
+        "gene_assignment_diagnostics": "gene_assignment_diagnostics.csv",
+        "gene_garbage_diagnostics_all": "gene_garbage_diagnostics_all.csv",
+        "garbage_genes_only": "garbage_genes_only.csv",
         "metagene_cme_tree": "metagene_cme_tree.png",
         "module_inclusion_heatmaps": "module_inclusion_heatmaps.png",
         "module_inclusion_hierarchy": "module_inclusion_hierarchy.png",

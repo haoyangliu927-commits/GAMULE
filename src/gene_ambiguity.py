@@ -28,6 +28,13 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(x, -60.0, 60.0)))
 
 
+def _rank_normalize(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float64)
+    if values.size <= 1:
+        return np.zeros_like(values, dtype=np.float64)
+    return pd.Series(values).rank(method="average", pct=True).to_numpy(dtype=np.float64)
+
+
 def compute_gene_ambiguity(
     positive_mask,
     negative_mask,
@@ -91,7 +98,6 @@ def compute_gene_ambiguity(
     )
     entropy = np.where(total_relation_degree > 0, entropy, 0.0)
     conflict_score = np.log1p(total_relation_degree) * entropy
-    raw_score = conflict_score.copy()
 
     direction_total = directed_out_degree + directed_in_degree
     direction_balance = np.divide(
@@ -99,6 +105,26 @@ def compute_gene_ambiguity(
         np.maximum(directed_out_degree, directed_in_degree),
         out=np.zeros_like(direction_total, dtype=np.float64),
         where=direction_total > 0,
+    )
+
+    contradiction_mask_pos_neg = positive & negative
+    contradiction_mask_partial_neg = partial & negative
+    contradiction_degree = (
+        contradiction_mask_pos_neg.sum(axis=1) + contradiction_mask_partial_neg.sum(axis=1)
+    ).astype(np.float64)
+    contradiction_score = np.log1p(contradiction_degree)
+
+    bidirectional_inclusion = directed & directed.T
+    bidirectional_inclusion_degree = bidirectional_inclusion.sum(axis=1).astype(np.float64)
+    bidirectional_inclusion_score = np.log1p(bidirectional_inclusion_degree)
+
+    conflict_score_norm = _rank_normalize(conflict_score)
+    contradiction_score_norm = _rank_normalize(contradiction_score)
+    bidirectional_score_norm = _rank_normalize(bidirectional_inclusion_score)
+    raw_score = (
+        conflict_score_norm
+        + contradiction_score_norm
+        + 0.5 * bidirectional_score_norm
     )
 
     median = float(np.median(raw_score))
@@ -123,6 +149,13 @@ def compute_gene_ambiguity(
             "total_relation_degree": total_relation_degree.astype(int),
             "relation_type_entropy": entropy,
             "relation_type_conflict_score": conflict_score,
+            "relation_type_conflict_score_norm": conflict_score_norm,
+            "contradiction_degree": contradiction_degree.astype(int),
+            "contradiction_score": contradiction_score,
+            "contradiction_score_norm": contradiction_score_norm,
+            "bidirectional_inclusion_degree": bidirectional_inclusion_degree.astype(int),
+            "bidirectional_inclusion_score": bidirectional_inclusion_score,
+            "bidirectional_inclusion_score_norm": bidirectional_score_norm,
             "direction_balance": direction_balance,
             "raw_ambiguity_score": raw_score,
             "robust_z": robust_z,

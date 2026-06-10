@@ -52,6 +52,9 @@ def train_embedding_weakpos0(
     ambiguity_weight=None,
     garbage_strength=0.0,
     clean_repel_strength=0.0,
+    garbage_margin_strength=0.0,
+    garbage_margin=0.1,
+    exclude_garbage_from_relation_loss=False,
     garbage_eps=1e-8,
     ):
     if isinstance(init_partition, np.ndarray):
@@ -89,7 +92,26 @@ def train_embedding_weakpos0(
         partition_used = F.softmax(partition, dim=1)      # (N, K)
         hyperedge_emb_norm = F.normalize(hyperedge_emb, p=2, dim=1)   # (K, D)
         gene_emb = partition_used @ hyperedge_emb_norm    # (N, D)
-        sim_matrix = gene_emb @ gene_emb.T
+        relation_partition = partition_used
+        relation_hyperedge_emb = hyperedge_emb_norm
+        if (
+            exclude_garbage_from_relation_loss
+            and garbage_hyperedge_index is not None
+        ):
+            garbage_idx = int(garbage_hyperedge_index)
+            if garbage_idx < 0 or garbage_idx >= partition_used.shape[1]:
+                raise ValueError(
+                    f"garbage_hyperedge_index={garbage_idx} is out of bounds for "
+                    f"{partition_used.shape[1]} hyperedges."
+                )
+            normal_indices = [
+                idx for idx in range(partition_used.shape[1]) if idx != garbage_idx
+            ]
+            relation_partition = partition_used[:, normal_indices]
+            relation_hyperedge_emb = hyperedge_emb_norm[normal_indices]
+
+        gene_emb_relation = relation_partition @ relation_hyperedge_emb
+        sim_matrix = gene_emb_relation @ gene_emb_relation.T
 
         # 主损失：弱正 + 负到0
         loss_main, loss_items = weak_pos_neg_loss(
@@ -143,6 +165,10 @@ def train_embedding_weakpos0(
                     f"{partition_used.shape[1]} hyperedges."
                 )
             p_garbage = partition_used[:, garbage_idx].clamp(garbage_eps, 1.0 - garbage_eps)
+            normal_indices = [
+                idx for idx in range(partition_used.shape[1]) if idx != garbage_idx
+            ]
+            max_normal_p = partition_used[:, normal_indices].max(dim=1).values
             weight = ambiguity_weight.to(device=partition_used.device, dtype=partition_used.dtype)
             loss_garbage_push = -(weight * torch.log(p_garbage + garbage_eps)).mean()
             loss_items["loss_garbage_push"] = loss_garbage_push
@@ -157,6 +183,17 @@ def train_embedding_weakpos0(
                     dtype=partition_used.dtype,
                 )
             loss_items["loss_clean_repel"] = loss_clean_repel
+            if garbage_margin_strength > 0.0:
+                loss_garbage_margin = (
+                    weight * F.relu(float(garbage_margin) + max_normal_p - p_garbage)
+                ).mean()
+            else:
+                loss_garbage_margin = torch.zeros(
+                    (),
+                    device=partition_used.device,
+                    dtype=partition_used.dtype,
+                )
+            loss_items["loss_garbage_margin"] = loss_garbage_margin
         else:
             loss_garbage_push = torch.zeros(
                 (),
@@ -168,6 +205,11 @@ def train_embedding_weakpos0(
                 device=partition_used.device,
                 dtype=partition_used.dtype,
             )
+            loss_garbage_margin = torch.zeros(
+                (),
+                device=partition_used.device,
+                dtype=partition_used.dtype,
+            )
 
         loss = (
             loss_main
@@ -175,6 +217,7 @@ def train_embedding_weakpos0(
             + alpha * loss_entropy
             + garbage_strength * loss_garbage_push
             + clean_repel_strength * loss_clean_repel
+            + garbage_margin_strength * loss_garbage_margin
         )
         loss.backward()
         optimizer.step()
@@ -202,7 +245,8 @@ def train_embedding_weakpos0(
             if garbage_enabled:
                 garbage_log = (
                     f", garbage_push: {loss_garbage_push.item():.9f}, "
-                    f"clean_repel: {loss_clean_repel.item():.9f}"
+                    f"clean_repel: {loss_clean_repel.item():.9f}, "
+                    f"garbage_margin: {loss_garbage_margin.item():.9f}"
                 )
             print(
                 f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.9f}, "
