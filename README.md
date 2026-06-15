@@ -1,34 +1,62 @@
-# Clean Hyperedge Package
+# GAMULE
 
-这个文件夹包含从 scRNA-seq expression 到 CME/Jaccard 正负监督，再到超边 gene module 推断的最小本地文件：
+GAMULE is a small workflow for discovering hierarchical gene modules from single-cell RNA-seq data.
 
-- `clean_supervision_run.ipynb`
-- `CME_CPU.py`
-- `src/supervision_pipeline.py`
-- `src/cme_supervision.py`
-- `src/cme_visualization.py`
-- `src/train.py`
-- `src/loss.py`
-- `scripts/test_cme_supervision.py`
-- `docs/cme_to_gene_modules.html`
-- `datasets/adata_672.h5ad`
+The current version builds gene-gene relation supervision from CME / p-value / inclusion scores, trains hyperedge-based gene modules, and then infers module-level hierarchy from directed inclusion relationships.
 
-在 Jupyter 里把工作目录设为这个文件夹，打开并运行 `clean_supervision_run.ipynb` 即可。环境里仍然需要已安装 `torch`、`scanpy`、`matplotlib` 等 Python 依赖。
+## Main Files
 
-命令行测试：
+- `run.py`: default example script.
+- `run_306.py`: simulation 306 example with 6 biological gene modules and 1 garbage hyperedge.
+- `src/`: core implementation.
+- `datasets/adata_306.h5ad`: example simulated scRNA-seq data.
+- `trees/tree_306.xml`: reference hierarchy for the 306 simulation.
+
+## Install
+
+Use Python 3.11 if possible.
 
 ```bash
-/home/luqi/miniforge3/envs/gamule/bin/python clean_HYperedge/scripts/test_cme_supervision.py
+pip install -r requirements.txt
 ```
 
-测试会生成：
+The main dependencies are `torch`, `scanpy`, `numpy`, `pandas`, `matplotlib`, `seaborn`, and `numba`.
 
-- `results/cme_supervision_heatmaps.png`
-- `results/cme_supervision_matrices.npz`
-- `results/cme_supervision_stats.json`
+## Run Example
 
-当前默认设计是 `6 + 1` 个超边：
+```bash
+python run_306.py
+```
 
-- 前 6 个是有意义的 gene modules，参与训练和相似度计算。
-- 最后 1 个是无意义/未分配超边，只接收完全没有出现在任何监督矩阵里的基因。
-- 第 7 个超边不参与训练时的 `partition @ hyperedge_emb`，最终 `gene_emb` 也只用前 6 个超边生成，因此不会影响有意义 gene modules 的相似度。
+The script will create:
+
+```text
+results/adata_306_results/
+```
+
+Key outputs include:
+
+- `summary.json`
+- `gene_modules.csv`
+- `gene_assignment_diagnostics.csv`
+- `garbage_genes_only.csv`
+- `training_loss_history.png`
+- `combined_supervision_heatmaps.png`
+- `module_inclusion_hierarchy.png`
+
+`results/` is ignored by git, so results are generated locally after running the script.
+
+## Method Overview
+
+1. Compute CME and p-value matrices from the expression matrix.
+2. Build three supervision masks:
+   - positive gene pairs
+   - negative / mutually exclusive gene pairs
+   - weak positive pairs from inclusion relationships
+3. Train gene-to-hyperedge soft assignments.
+4. Use a garbage hyperedge for broad or weakly informative genes.
+5. Aggregate gene-level directed inclusion into module-level hierarchy.
+
+## Notes
+
+If a matching XML file exists in `trees/`, the script uses it to evaluate cell-type and hierarchy accuracy for simulated data. For real data without XML, this evaluation step is skipped.
