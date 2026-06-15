@@ -57,7 +57,7 @@ from src.supervision_pipeline import (
 
 
 # %%
-ADATA_PATH = REPO_ROOT / "datasets/adata_ngn3_ss.h5ad"
+ADATA_PATH = REPO_ROOT / "datasets/adata_306.h5ad"
 tree_id_match = re.search(r"adata_(\d+)", ADATA_PATH.stem)
 if tree_id_match:
     local_tree_xml_path = REPO_ROOT / "trees" / f"tree_{tree_id_match.group(1)}.xml"
@@ -134,29 +134,29 @@ t_inclusion = 0.10
 jaccard_pos_strength = 0.5
 inclusion_partial_strength = 0.25
 neg_strength = 0.0
-hierarchy_strength = 0.0
-hierarchy_margin = 0.0
+hierarchy_strength = 0.01
+hierarchy_margin = 0.05
 hierarchy_min_direction_weight = 0.0
 n_permutations = 100
 
-num_biological_modules = 3
+num_biological_modules = 6
 num_garbage_modules = 1
 num_hyperedges = num_biological_modules + num_garbage_modules
 num_hyperedges = max(1, min(num_hyperedges, num_genes))
 garbage_hyperedge_index = num_hyperedges - 1
-garbage_strength = 0.05
+garbage_strength = 0.01
 clean_repel_strength = 0.0
-garbage_margin_strength = 0.05
-garbage_margin = 0.1
+garbage_margin_strength = 0.0
+garbage_margin = 0.05
 exclude_garbage_from_relation_loss = True
 initialize_all_to_garbage = True
-garbage_init_logit = 0.2
+garbage_init_logit = 0.05
 normal_init_logit = 0.0
 use_unassigned_hyperedge = False
 training_epochs = 10000
 entropy_strength = 0.001
 entropy_schedule = "delayed_linear"
-entropy_warmup_start_fraction = 0.5
+entropy_warmup_start_fraction = 0.6
 entropy_warmup_end_fraction = 1.0
 
 torch.manual_seed(seed)
