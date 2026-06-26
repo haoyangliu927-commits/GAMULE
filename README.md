@@ -6,11 +6,11 @@ The current version builds gene-gene relation supervision from CME / p-value / i
 
 ## Main Files
 
-- `run.py`: default example script.
-- `run_306.py`: simulation 306 example with 6 biological gene modules and 1 garbage hyperedge.
+- `run.py`: default analysis entry.
+- `run_306.py`: example script for the 306 simulation with 6 biological gene modules and 1 garbage hyperedge.
 - `src/`: core implementation.
+- `scripts/`: grid search and supervision test scripts.
 - `datasets/adata_306.h5ad`: example simulated scRNA-seq data.
-- `trees/tree_306.xml`: reference hierarchy for the 306 simulation.
 
 ## Install
 
@@ -56,7 +56,3 @@ Key outputs include:
 3. Train gene-to-hyperedge soft assignments.
 4. Use a garbage hyperedge for broad or weakly informative genes.
 5. Aggregate gene-level directed inclusion into module-level hierarchy.
-
-## Notes
-
-If a matching XML file exists in `trees/`, the script uses it to evaluate cell-type and hierarchy accuracy for simulated data. For real data without XML, this evaluation step is skipped.
