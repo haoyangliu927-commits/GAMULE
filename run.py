@@ -35,6 +35,7 @@ from src.cme_supervision import (
     save_supervision_npz,
 )
 from src.gene_ambiguity import compute_gene_ambiguity
+from src.cell_type_evaluation import evaluate_cell_type_modules
 from src.cme_visualization import (
     plot_combined_cme_supervision_heatmaps,
 )
@@ -62,6 +63,18 @@ adata = sc.read(ADATA_PATH)
 num_cells = int(adata.n_obs)
 num_genes = int(adata.n_vars)
 
+CELL_TYPE_COLUMN_CANDIDATES = [
+    "cell type",
+    "cell_type",
+    "celltype",
+    "celltype.l1",
+    "celltype.l2",
+]
+CELL_TYPE_COLUMN = next(
+    (col for col in CELL_TYPE_COLUMN_CANDIDATES if col in adata.obs.columns),
+    None,
+)
+
 print({"adata_path": str(ADATA_PATH), "num_cells": num_cells, "num_genes": num_genes})
 
 def get_gene_module_labels(adata, col_name="gene_module"):
@@ -77,7 +90,11 @@ observed_gene_modules = sorted(
     label for label in adata.var["gene_module"].unique().tolist()
     if label not in {"NA", ""}
 )
-observed_cell_types = sorted(adata.obs["cell_type"].astype(str).unique().tolist()) if "cell_type" in adata.obs else []
+observed_cell_types = (
+    sorted(adata.obs[CELL_TYPE_COLUMN].astype(str).unique().tolist())
+    if CELL_TYPE_COLUMN is not None
+    else []
+)
 
 print({
     "observed_gene_modules": observed_gene_modules,
@@ -417,6 +434,26 @@ fig = plot_module_inclusion_hierarchy(
 )
 plt.close(fig)
 
+# ===== gene module activity -> cell type 判断 =====
+cell_type_accuracy_summary = None
+hierarchy_accuracy_summary = None
+cell_type_module_result = None
+
+if CELL_TYPE_COLUMN is not None:
+    cell_type_module_result = evaluate_cell_type_modules(
+        adata=adata,
+        gene_assignment=gene_assignment_diagnostics,
+        cell_type_column=CELL_TYPE_COLUMN,
+        garbage_hyperedge_index=garbage_hyperedge_index,
+        result_dir=RESULT_DIR,
+        exclude_garbage=True,
+    )
+    cell_type_accuracy_summary = cell_type_module_result.summary
+    print({"cell_type_module_summary": cell_type_accuracy_summary})
+    print(cell_type_module_result.module_cell_type_table.head(20))
+else:
+    print("adata.obs 里没有可用的 cell type ground truth 列，跳过细胞类型评估。")
+
 assigned_garbage_mask = assigned_hyperedge == garbage_hyperedge_index
 if assigned_garbage_mask.any():
     mean_garbage_probability_assigned_garbage = float(
@@ -457,6 +494,7 @@ else:
 
 summary = {
     "adata_path": str(ADATA_PATH),
+    "cell_type_column": CELL_TYPE_COLUMN,
     "shape": list(adata.shape),
     "result_dir": str(RESULT_DIR),
     "run_config": run_config,
@@ -482,6 +520,8 @@ summary = {
     "mean_garbage_margin_assigned_garbage": mean_garbage_margin_assigned_garbage,
     "reference_module_counts_assigned_garbage": reference_module_counts_assigned_garbage,
     "module_inclusion_stats": module_inclusion.stats,
+    "cell_type_accuracy": cell_type_accuracy_summary,
+    "hierarchy_accuracy": hierarchy_accuracy_summary,
     "outputs": {
         "input_expression_heatmap": "input_expression_heatmap.png",
         "combined_supervision_heatmaps": "combined_supervision_heatmaps.png",
@@ -495,6 +535,10 @@ summary = {
         "module_inclusion_hierarchy": "module_inclusion_hierarchy.png",
         "module_inclusion_selected_edges": "module_inclusion_selected_edges.csv",
         "gene_modules": "gene_modules.csv",
+        "module_cell_type_table": "module_cell_type_table.csv",
+        "cell_assignment_from_modules": "cell_assignment_from_modules.csv",
+        "cell_type_module_mean_scores": "cell_type_module_mean_scores.csv",
+        "cell_type_module_mean_scores_heatmap": "cell_type_module_mean_scores_heatmap.png",
     },
 }
 with open(RESULT_DIR / "summary.json", "w", encoding="utf-8") as handle:
