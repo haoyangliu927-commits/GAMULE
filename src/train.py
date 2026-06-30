@@ -177,7 +177,7 @@ def train_embedding_weakpos0(
         hierarchy_enabled = directed_inclusion_mask is not None and hierarchy_strength > 0.0
         if hierarchy_enabled:
             loss_hierarchy = directed_hyperedge_inclusion_loss(
-                partition_soft=partition_used,
+                partition_soft=relation_partition,
                 neg_mask=neg_mask,
                 directed_inclusion_mask=directed_inclusion_mask,
                 margin=hierarchy_margin,

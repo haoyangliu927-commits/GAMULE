@@ -34,6 +34,7 @@ from src.cme_supervision import (
     load_expression_from_h5ad,
     save_supervision_npz,
 )
+from src.cell_assignment import assign_cells_by_hierarchy_prototypes
 from src.gene_ambiguity import compute_gene_ambiguity
 from src.cme_visualization import (
     plot_combined_cme_supervision_heatmaps,
@@ -349,10 +350,13 @@ plt.close(fig)
 
 # %%
 # ===== 训练后的超边 gene modules -> module-level directed inclusion =====
+hierarchy_hyperedge_indices = [
+    idx for idx in range(result.num_gene_modules) if idx != garbage_hyperedge_index
+]
 module_gene_indices = genes_by_hyperedge(
     result.partition,
     null_hyperedge_index=result.null_hyperedge_index,
-    meaningful_hyperedge_indices=range(result.num_gene_modules),
+    meaningful_hyperedge_indices=hierarchy_hyperedge_indices,
     assignment="argmax",
 )
 module_gene_names = {
@@ -416,6 +420,16 @@ fig = plot_module_inclusion_hierarchy(
     save_path=RESULT_DIR / "module_inclusion_hierarchy.png",
 )
 plt.close(fig)
+
+cell_assignment = assign_cells_by_hierarchy_prototypes(
+    adata.X,
+    module_gene_indices,
+    module_inclusion,
+    cell_names=adata.obs_names.astype(str),
+)
+cell_assignment.table.to_csv(RESULT_DIR / "cell_prototype_assignments.csv", index=False)
+adata.obs["gamule_leaf_label"] = cell_assignment.table["leaf_label"].to_numpy()
+adata.obs["gamule_coarse_label"] = cell_assignment.table["coarse_label"].to_numpy()
 
 assigned_garbage_mask = assigned_hyperedge == garbage_hyperedge_index
 if assigned_garbage_mask.any():
@@ -481,7 +495,10 @@ summary = {
     "mean_max_normal_probability_assigned_garbage": mean_max_normal_probability_assigned_garbage,
     "mean_garbage_margin_assigned_garbage": mean_garbage_margin_assigned_garbage,
     "reference_module_counts_assigned_garbage": reference_module_counts_assigned_garbage,
+    "hierarchy_hyperedge_indices": hierarchy_hyperedge_indices,
+    "excluded_hyperedge_from_hierarchy": int(garbage_hyperedge_index),
     "module_inclusion_stats": module_inclusion.stats,
+    "cell_assignment_stats": cell_assignment.stats,
     "outputs": {
         "input_expression_heatmap": "input_expression_heatmap.png",
         "combined_supervision_heatmaps": "combined_supervision_heatmaps.png",
@@ -495,6 +512,7 @@ summary = {
         "module_inclusion_hierarchy": "module_inclusion_hierarchy.png",
         "module_inclusion_selected_edges": "module_inclusion_selected_edges.csv",
         "gene_modules": "gene_modules.csv",
+        "cell_prototype_assignments": "cell_prototype_assignments.csv",
     },
 }
 with open(RESULT_DIR / "summary.json", "w", encoding="utf-8") as handle:

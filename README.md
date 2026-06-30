@@ -43,6 +43,7 @@ Key outputs include:
 - `training_loss_history.png`
 - `combined_supervision_heatmaps.png`
 - `module_inclusion_hierarchy.png`
+- `cell_prototype_assignments.csv`
 
 `results/` is ignored by git, so results are generated locally after running the script.
 
@@ -54,5 +55,6 @@ Key outputs include:
    - negative / mutually exclusive gene pairs
    - weak positive pairs from inclusion relationships
 3. Train gene-to-hyperedge soft assignments.
-4. Use a garbage hyperedge for broad or weakly informative genes.
+4. Use a garbage hyperedge for broad or weakly informative genes, then exclude it from hierarchy inference.
 5. Aggregate gene-level directed inclusion into module-level hierarchy.
+6. Assign cells to leaf modules with shared-path hierarchy prototypes.
